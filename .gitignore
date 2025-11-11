@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+package-lock.json
+bun.lock
+
+# Build artifacts
+target/
+*.node
+!thai-smartcard.*.node
+index.js
+index.d.ts
+thai-id-adapter.js
+thai-id-adapter.d.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+

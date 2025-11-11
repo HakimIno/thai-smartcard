@@ -1,0 +1,57 @@
+{
+  "name": "thai-smartcard",
+  "version": "1.0.0",
+  "description": "High-performance Smart Card Reader library - Native Rust bindings for PC/SC. Supports all smart card types (Thai ID, EMV, etc.)",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "require": "./index.js",
+      "types": "./index.d.ts"
+    },
+    "./thai-id-adapter": {
+      "import": "./thai-id-adapter.js",
+      "require": "./thai-id-adapter.js",
+      "types": "./thai-id-adapter.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release && tsc index.ts --outDir . --module commonjs --target es2020 --esModuleInterop --skipLibCheck --declaration",
+    "build:dev": "napi build --platform && tsc index.ts --outDir . --module commonjs --target es2020 --esModuleInterop --skipLibCheck --declaration",
+    "build:all": "bash scripts/build-all.sh",
+    "prepublishOnly": "echo 'Pre-built binaries should be included. Run npm run build:all before publish if building locally.'"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.7.0"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0",
+    "@types/node": "^24.10.0",
+    "typescript": "^5.0.0"
+  },
+  "napi": {
+    "binaryName": "thai-smartcard",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl"
+    ]
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "thai-id-adapter.js",
+    "thai-id-adapter.d.ts",
+    "*.node"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "license": "MIT"
+}

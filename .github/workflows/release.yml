@@ -1,0 +1,114 @@
+name: Build and Publish (Prebuilt Binaries)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install PC/SC libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pcscd libpcsclite-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build native addon
+        run: npx napi build --platform --target ${{ matrix.target }} --release
+
+      - name: Build TypeScript shims
+        run: |
+          npx tsc index.ts --outDir . --module commonjs --target es2020 --esModuleInterop --skipLibCheck --declaration
+          npx tsc thai-id-adapter.ts --outDir . --module commonjs --target es2020 --esModuleInterop --skipLibCheck --declaration
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            *.node
+            index.js
+            index.d.ts
+            thai-id-adapter.js
+            thai-id-adapter.d.ts
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect package files
+        run: |
+          find artifacts -name \"*.node\" -exec cp {} . \\;
+          # Keep TS outputs from any matrix job (redundant-safe)
+          find artifacts -name \"index.js\" -exec cp {} . \\; || true
+          find artifacts -name \"index.d.ts\" -exec cp {} . \\; || true
+          find artifacts -name \"thai-id-adapter.js\" -exec cp {} . \\; || true
+          find artifacts -name \"thai-id-adapter.d.ts\" -exec cp {} . \\; || true
+          ls -lh
+
+      - name: Verify package contents
+        run: |
+          node -e "const f=require('./package.json'); console.log('name:', f.name, 'version:', f.version)"
+          ls -lh *.node index.js index.d.ts thai-id-adapter.js thai-id-adapter.d.ts
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+
