@@ -48,14 +48,32 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pcscd libpcsclite-dev pkg-config
+          sudo apt-get install -y pcscd libpcsclite-dev pkg-config pkg-config-aarch64-linux-gnu
           # Install musl toolchain for musl targets
           if [[ "${{ matrix.target }}" == *"musl"* ]]; then
             sudo apt-get install -y musl-tools
           fi
           # Install cross-compilation toolchain for aarch64
           if [[ "${{ matrix.target }}" == *"aarch64"* && "${{ matrix.target }}" != *"musl"* ]]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
+            sudo apt-get install -y gcc-aarch64-linux-gnu libpcsclite-dev:arm64 || echo "arm64 package not available, using cross-compilation"
+          fi
+
+      - name: Configure pkg-config for cross-compilation
+        if: runner.os == 'Linux' && (contains(matrix.target, 'musl') || contains(matrix.target, 'aarch64'))
+        run: |
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          if [[ "${{ matrix.target }}" == *"aarch64"* && "${{ matrix.target }}" != *"musl"* ]]; then
+            echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+            echo "PKG_CONFIG=aarch64-linux-gnu-pkg-config" >> $GITHUB_ENV
+          fi
+          # For musl, set library paths based on architecture
+          if [[ "${{ matrix.target }}" == *"musl"* ]]; then
+            if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
+              echo "LIBPCSCLITE_LIB_DIR=/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
+            else
+              echo "LIBPCSCLITE_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
+            fi
+            echo "LIBPCSCLITE_INCLUDE_DIR=/usr/include/PCSC" >> $GITHUB_ENV
           fi
 
       - name: Install dependencies
@@ -64,8 +82,8 @@ jobs:
       - name: Build native addon
         env:
           PKG_CONFIG_ALLOW_CROSS: ${{ runner.os == 'Linux' && (contains(matrix.target, 'musl') || contains(matrix.target, 'aarch64')) && '1' || '' }}
-          # For musl and aarch64, use system libraries instead of pkg-config
-          LIBPCSCLITE_NO_PKG_CONFIG: ${{ runner.os == 'Linux' && (contains(matrix.target, 'musl') || (contains(matrix.target, 'aarch64') && !contains(matrix.target, 'musl'))) && '1' || '' }}
+          # For musl, bypass pkg-config and link directly
+          LIBPCSCLITE_NO_PKG_CONFIG: ${{ runner.os == 'Linux' && contains(matrix.target, 'musl') && '1' || '' }}
         run: npx napi build --platform --target ${{ matrix.target }} --release
 
       - name: Build TypeScript shims
