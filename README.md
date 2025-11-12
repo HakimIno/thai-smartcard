@@ -16,9 +16,26 @@ High-performance Smart Card Reader library for Node.js - Native Rust bindings fo
 ## Prerequisites
 
 - **Node.js** 14.0 or higher
-- **PC/SC Smart Card Service**
-  - macOS/Windows: Pre-installed
-  - Linux: `sudo apt-get install pcscd libpcsclite1` (Ubuntu/Debian) or `sudo dnf install pcsc-lite pcsc-lite-libs` (Fedora/RHEL)
+- **PC/SC Smart Card Service** (runtime dependency)
+  - **macOS/Windows**: Pre-installed ✅
+  - **Linux**: Must be installed manually
+    ```bash
+    # Ubuntu/Debian
+    sudo apt-get update
+    sudo apt-get install -y pcscd libpcsclite1
+    sudo systemctl start pcscd
+    
+    # Fedora/RHEL/CentOS
+    sudo dnf install -y pcsc-lite pcsc-lite-libs
+    sudo systemctl start pcscd
+    
+    # Alpine Linux
+    apk add --no-cache pcsc-lite pcsc-lite-dev
+    ```
+  - **Docker**: Add to Dockerfile:
+    ```dockerfile
+    RUN apt-get update && apt-get install -y pcscd libpcsclite1
+    ```
 - **Card Reader** compatible with PC/SC protocol
 
 ## Installation
@@ -210,9 +227,15 @@ try {
 
 ## Troubleshooting
 
+**Error: `libpcsclite.so.1: No such file or directory`**
+- **Solution**: Install PC/SC libraries (see Prerequisites above)
+- **Verify**: `ldconfig -p | grep pcsclite` should show `libpcsclite.so.1`
+- **Docker**: Make sure PC/SC libraries are installed in your Docker image
+
 **No readers found:**
 - Ensure card reader is connected
 - Check PC/SC service is running: `sudo systemctl status pcscd` (Linux)
+- Start service: `sudo systemctl start pcscd`
 
 **Permission errors (Linux):**
 ```bash

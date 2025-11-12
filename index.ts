@@ -13,16 +13,62 @@ const loadBinding = (): any => {
   const platform = process.platform;
   const arch = process.arch;
   
+  // Detect if running on musl (Alpine Linux)
+  // Check for Alpine-specific files or try to detect musl
+  let isMusl = false;
+  if (platform === 'linux') {
+    try {
+      // Check for Alpine release file (most reliable)
+      if (existsSync('/etc/alpine-release')) {
+        isMusl = true;
+      } else {
+        // Try to detect musl by checking if ldd exists and what it reports
+        // musl-based systems typically don't have glibc
+        const { execSync } = require('child_process');
+        try {
+          const lddOutput = execSync('ldd --version 2>&1', { encoding: 'utf-8', stdio: 'pipe' });
+          // musl ldd reports "musl libc" while glibc reports "GNU libc"
+          if (lddOutput.includes('musl')) {
+            isMusl = true;
+          }
+        } catch {
+          // If ldd fails, assume glibc (most common)
+          isMusl = false;
+        }
+      }
+    } catch {
+      // If detection fails, default to gnu (most common)
+      isMusl = false;
+    }
+  }
+  
   // Determine platform-specific binary name
   let platformBinary: string;
+  let platformBinaryAlt: string | null = null;
   if (platform === 'darwin') {
     platformBinary = arch === 'arm64' 
       ? 'thai-smartcard.darwin-arm64.node'
       : 'thai-smartcard.darwin-x64.node';
   } else if (platform === 'linux') {
-    platformBinary = arch === 'arm64'
-      ? 'thai-smartcard.linux-arm64-gnu.node'
-      : 'thai-smartcard.linux-x64-gnu.node';
+    if (isMusl) {
+      // Prefer musl binary for Alpine
+      platformBinary = arch === 'arm64'
+        ? 'thai-smartcard.linux-arm64-musl.node'
+        : 'thai-smartcard.linux-x64-musl.node';
+      // Also try gnu as fallback
+      platformBinaryAlt = arch === 'arm64'
+        ? 'thai-smartcard.linux-arm64-gnu.node'
+        : 'thai-smartcard.linux-x64-gnu.node';
+    } else {
+      // Default to gnu for most Linux distributions
+      platformBinary = arch === 'arm64'
+        ? 'thai-smartcard.linux-arm64-gnu.node'
+        : 'thai-smartcard.linux-x64-gnu.node';
+      // Also try musl as fallback
+      platformBinaryAlt = arch === 'arm64'
+        ? 'thai-smartcard.linux-arm64-musl.node'
+        : 'thai-smartcard.linux-x64-musl.node';
+    }
   } else if (platform === 'win32') {
     platformBinary = arch === 'arm64'
       ? 'thai-smartcard.win32-arm64-msvc.node'
@@ -35,11 +81,15 @@ const loadBinding = (): any => {
     // Development build (highest priority)
     join(packageRoot, 'thai-smartcard.node'),
     join(packageRoot, 'index.node'),
-    // Platform-specific production build
+    // Platform-specific production build (preferred libc)
     platformBinary ? join(packageRoot, platformBinary) : null,
+    // Alternative libc binary (musl/gnu)
+    platformBinaryAlt ? join(packageRoot, platformBinaryAlt) : null,
     // Fallback: try all platform binaries
     join(packageRoot, 'thai-smartcard.darwin-arm64.node'),
     join(packageRoot, 'thai-smartcard.darwin-x64.node'),
+    join(packageRoot, 'thai-smartcard.linux-arm64-musl.node'),
+    join(packageRoot, 'thai-smartcard.linux-x64-musl.node'),
     join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'),
     join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'),
     join(packageRoot, 'thai-smartcard.win32-arm64-msvc.node'),
@@ -48,13 +98,72 @@ const loadBinding = (): any => {
 
   for (const binding of bindings) {
     if (existsSync(binding)) {
-      nativeBinding = require(binding);
-      return nativeBinding;
+      try {
+        nativeBinding = require(binding);
+        return nativeBinding;
+      } catch (error: any) {
+        const errorMessage = error?.message || String(error);
+        
+        // Check for PC/SC library missing error
+        if (errorMessage.includes('libpcsclite') || errorMessage.includes('pcsclite')) {
+          const muslNote = isMusl 
+            ? `\n   NOTE: You are running on Alpine Linux (musl). Make sure you have the musl-compatible binary.\n`
+            : '';
+          const troubleshooting = platform === 'linux'
+            ? `\n\nTROUBLESHOOTING:\n` +
+              `1. Install PC/SC libraries:\n` +
+              `   Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y pcscd libpcsclite1\n` +
+              `   Alpine: apk add --no-cache pcsc-lite\n` +
+              `   Fedora/RHEL: sudo dnf install -y pcsc-lite pcsc-lite-libs\n${muslNote}\n` +
+              `2. Verify library is installed:\n` +
+              `   Run: ldconfig -p | grep pcsclite || ls -la /lib/libpcsclite.so* || ls -la /usr/lib/libpcsclite.so*\n\n` +
+              `3. For Docker (Alpine):\n` +
+              `   - Make sure pcsc-lite is installed: RUN apk add --no-cache pcsc-lite\n` +
+              `   - Verify the musl binary exists: ls -la node_modules/thai-smartcard/thai-smartcard.linux-x64-musl.node\n` +
+              `   - If musl binary is missing, the package may need to be rebuilt with musl support\n\n` +
+              `4. For Docker (Debian/Ubuntu):\n` +
+              `   - Make sure libpcsclite1 is installed: RUN apt-get update && apt-get install -y libpcsclite1\n` +
+              `   - If using multi-stage build, ensure runtime dependencies are copied to final stage\n\n` +
+              `5. Check library path:\n` +
+              `   Alpine: LD_LIBRARY_PATH=/lib:/usr/lib node your-app.js\n` +
+              `   Debian/Ubuntu: LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib:/usr/lib node your-app.js\n`
+            : '';
+          
+          throw new Error(
+            `Failed to load native binding: ${errorMessage}${troubleshooting}`
+          );
+        }
+        
+        // Check for binary compatibility errors (musl vs gnu)
+        if (errorMessage.includes('No such file') && platform === 'linux' && binding.includes('.node')) {
+          const muslHint = isMusl
+            ? `\n\nNOTE: You are on Alpine Linux (musl). The package needs the musl-compatible binary.\n` +
+              `Expected: thai-smartcard.linux-x64-musl.node or thai-smartcard.linux-arm64-musl.node\n` +
+              `If missing, the package may need to be rebuilt or you may need to use a Debian/Ubuntu base image.\n`
+            : '';
+          if (muslHint) {
+            throw new Error(
+              `Failed to load native binding: ${errorMessage}${muslHint}`
+            );
+          }
+        }
+        
+        // Re-throw other errors as-is
+        throw error;
+      }
     }
   }
 
+  const muslInfo = platform === 'linux' && isMusl
+    ? `\n\nNOTE: You are running on Alpine Linux (musl). The package needs musl-compatible binaries.\n` +
+      `Expected binary: thai-smartcard.linux-${arch === 'arm64' ? 'arm64' : 'x64'}-musl.node\n` +
+      `If the musl binary is missing, you may need to:\n` +
+      `1. Rebuild the package with musl support, or\n` +
+      `2. Use a Debian/Ubuntu base image instead of Alpine\n`
+    : '';
+  
   throw new Error(
-    `Cannot find native binding for thai-smartcard on ${platform}-${arch}. Tried: ${bindings.join(', ')}`
+    `Cannot find native binding for thai-smartcard on ${platform}-${arch}. Tried: ${bindings.join(', ')}${muslInfo}`
   );
 };
 

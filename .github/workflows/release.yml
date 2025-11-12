@@ -15,6 +15,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
           - os: windows-latest
             target: x86_64-pc-windows-msvc
           - os: windows-latest
@@ -38,8 +44,23 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install PC/SC libraries (Linux)
-        if: runner.os == 'Linux'
+      - name: Install musl toolchain (for musl targets)
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
+            sudo apt-get install -y musl-tools
+          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            # For aarch64 musl, we need cross-compilation toolchain
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            # Install musl cross-compiler from musl.cc or use cargo-xbuild
+            curl -L https://musl.cc/aarch64-linux-musl-cross.tgz | tar -xz -C /tmp
+            echo "$(find /tmp -name 'aarch64-linux-musl-cross' -type d | head -1)/bin" >> $GITHUB_PATH
+          fi
+          rustup target add ${{ matrix.target }}
+
+      - name: Install PC/SC libraries (Linux gnu targets)
+        if: runner.os == 'Linux' && !contains(matrix.target, 'musl')
         run: |
           sudo apt-get update
           sudo apt-get install -y pcscd libpcsclite-dev pkg-config
@@ -49,6 +70,12 @@ jobs:
 
       - name: Build native addon
         run: npx napi build --platform --target ${{ matrix.target }} --release
+        env:
+          # For musl targets, set appropriate linker
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-cross-gcc
+          # PC/SC library path for musl (will link dynamically at runtime)
+          PKG_CONFIG_ALLOW_CROSS: 1
 
       - name: Build TypeScript shims
         run: |
