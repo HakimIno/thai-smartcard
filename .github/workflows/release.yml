@@ -87,12 +87,12 @@ jobs:
 
       - name: Collect package files
         run: |
-          find artifacts -name \"*.node\" -exec cp {} . \\;
+          find artifacts -name "*.node" -exec cp {} . \;
           # Keep TS outputs from any matrix job (redundant-safe)
-          find artifacts -name \"index.js\" -exec cp {} . \\; || true
-          find artifacts -name \"index.d.ts\" -exec cp {} . \\; || true
-          find artifacts -name \"thai-id-adapter.js\" -exec cp {} . \\; || true
-          find artifacts -name \"thai-id-adapter.d.ts\" -exec cp {} . \\; || true
+          find artifacts -name "index.js" -exec cp {} . \; || true
+          find artifacts -name "index.d.ts" -exec cp {} . \; || true
+          find artifacts -name "thai-id-adapter.js" -exec cp {} . \; || true
+          find artifacts -name "thai-id-adapter.d.ts" -exec cp {} . \; || true
           ls -lh
 
       - name: Verify package contents
