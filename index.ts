@@ -99,9 +99,17 @@ const loadBinding = (): any => {
   // For Linux, handle musl vs glibc carefully
   if (platform === 'linux') {
     if (isMusl) {
-      // On musl (Alpine), ONLY try musl binaries - never try gnu binaries
-      // platformBinary already contains the correct musl binary for this arch
-      // No need to add gnu binaries - they will fail with ld-linux-x86-64.so.2 error
+      // On musl (Alpine), try musl first, then gnu with gcompat
+      // With gcompat installed, gnu binaries work on Alpine
+      if (platformBinaryAlt) {
+        bindings.push(join(packageRoot, platformBinaryAlt));
+      }
+      // Add other gnu variants as fallback (requires gcompat on Alpine)
+      if (arch === 'arm64') {
+        bindings.push(join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'));
+      } else {
+        bindings.push(join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'));
+      }
     } else {
       // On glibc, try musl as fallback (musl binaries can work on glibc, but not vice versa)
       if (platformBinaryAlt) {
@@ -124,17 +132,16 @@ const loadBinding = (): any => {
     bindings.push(join(packageRoot, platformBinaryAlt));
   }
 
-  // Add other platform binaries as final fallback (but skip gnu binaries on musl)
-  if (platform !== 'linux' || !isMusl) {
-    bindings.push(
-      join(packageRoot, 'thai-smartcard.darwin-arm64.node'),
-      join(packageRoot, 'thai-smartcard.darwin-x64.node'),
-      join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'),
-      join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'),
-      join(packageRoot, 'thai-smartcard.win32-arm64-msvc.node'),
-      join(packageRoot, 'thai-smartcard.win32-x64-msvc.node')
-    );
-  }
+  // Add other platform binaries as final fallback
+  // Note: gnu binaries work on Alpine with gcompat
+  bindings.push(
+    join(packageRoot, 'thai-smartcard.darwin-arm64.node'),
+    join(packageRoot, 'thai-smartcard.darwin-x64.node'),
+    join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'),
+    join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'),
+    join(packageRoot, 'thai-smartcard.win32-arm64-msvc.node'),
+    join(packageRoot, 'thai-smartcard.win32-x64-msvc.node')
+  );
 
   for (const binding of bindings) {
     if (existsSync(binding)) {
@@ -144,25 +151,23 @@ const loadBinding = (): any => {
       } catch (error: any) {
         const errorMessage = error?.message || String(error);
         
-        // Check for glibc linker missing error (trying to load gnu binary on musl/Alpine)
+        // Check for glibc linker missing error (trying to load gnu binary on Alpine without gcompat)
         if (errorMessage.includes('ld-linux-x86-64.so.2') || 
             errorMessage.includes('ld-linux-aarch64.so.1') ||
-            errorMessage.includes('Error loading shared library')) {
-          // This means we're trying to load a glibc binary on musl
-          // Skip this binary and continue to next one
-          if (platform === 'linux' && binding.includes('-gnu.node')) {
-            // Silently skip gnu binaries on musl systems
+            errorMessage.includes('Error loading shared library ld-linux')) {
+          // This means we're trying to load a glibc binary on musl without gcompat
+          // Skip this binary and try the next one
+          if (platform === 'linux' && isMusl && binding.includes('-gnu.node')) {
+            // Skip gnu binaries on Alpine if gcompat is not installed
             continue;
           }
           // If we're on musl but this isn't a gnu binary, something else is wrong
-          if (isMusl && !binding.includes('-musl.node')) {
+          if (isMusl && !binding.includes('-musl.node') && !binding.includes('-gnu.node')) {
             const muslHint = `\n\nERROR: Trying to load incompatible binary on Alpine Linux (musl).\n` +
               `The binary "${binding}" requires glibc, but this system uses musl libc.\n` +
-              `Expected musl binary: thai-smartcard.linux-${arch === 'arm64' ? 'arm64' : 'x64'}-musl.node\n` +
-              `If the musl binary is missing, you may need to:\n` +
-              `1. Rebuild the package with musl support: npm run build:all\n` +
-              `2. Use a Debian/Ubuntu base image instead of Alpine\n` +
-              `3. Install glibc compatibility layer (not recommended)\n`;
+              `For Alpine Linux, install gcompat:\n` +
+              `  apk add --no-cache gcompat pcsc-lite-libs\n` +
+              `Or use a Debian/Ubuntu base image instead.\n`;
             throw new Error(`Failed to load native binding: ${errorMessage}${muslHint}`);
           }
         }
@@ -176,14 +181,14 @@ const loadBinding = (): any => {
             ? `\n\nTROUBLESHOOTING:\n` +
               `1. Install PC/SC libraries:\n` +
               `   Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y pcscd libpcsclite1\n` +
-              `   Alpine: apk add --no-cache pcsc-lite\n` +
+              `   Alpine: apk add --no-cache pcsc-lite-libs gcompat\n` +
               `   Fedora/RHEL: sudo dnf install -y pcsc-lite pcsc-lite-libs\n${muslNote}\n` +
               `2. Verify library is installed:\n` +
               `   Run: ldconfig -p | grep pcsclite || ls -la /lib/libpcsclite.so* || ls -la /usr/lib/libpcsclite.so*\n\n` +
               `3. For Docker (Alpine):\n` +
-              `   - Make sure pcsc-lite is installed: RUN apk add --no-cache pcsc-lite\n` +
-              `   - Verify the musl binary exists: ls -la node_modules/thai-smartcard/thai-smartcard.linux-x64-musl.node\n` +
-              `   - If musl binary is missing, the package may need to be rebuilt with musl support\n\n` +
+              `   - Install required packages: RUN apk add --no-cache pcsc-lite-libs gcompat\n` +
+              `   - gcompat provides glibc compatibility for gnu binaries on Alpine\n` +
+              `   - Verify binary exists: ls -la node_modules/thai-smartcard/thai-smartcard.linux-x64-gnu.node\n\n` +
               `4. For Docker (Debian/Ubuntu):\n` +
               `   - Make sure libpcsclite1 is installed: RUN apt-get update && apt-get install -y libpcsclite1\n` +
               `   - If using multi-stage build, ensure runtime dependencies are copied to final stage\n\n` +
@@ -218,11 +223,11 @@ const loadBinding = (): any => {
   }
 
   const muslInfo = platform === 'linux' && isMusl
-    ? `\n\nNOTE: You are running on Alpine Linux (musl). The package needs musl-compatible binaries.\n` +
-      `Expected binary: thai-smartcard.linux-${arch === 'arm64' ? 'arm64' : 'x64'}-musl.node\n` +
-      `If the musl binary is missing, you may need to:\n` +
-      `1. Rebuild the package with musl support, or\n` +
-      `2. Use a Debian/Ubuntu base image instead of Alpine\n`
+    ? `\n\nNOTE: You are running on Alpine Linux (musl).\n` +
+      `Expected binary: thai-smartcard.linux-${arch === 'arm64' ? 'arm64' : 'x64'}-gnu.node\n` +
+      `For Alpine Linux, install gcompat for glibc compatibility:\n` +
+      `  apk add --no-cache gcompat pcsc-lite-libs\n` +
+      `Alternatively, use a Debian/Ubuntu base image.\n`
     : '';
   
   throw new Error(
