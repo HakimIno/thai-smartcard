@@ -10,28 +10,41 @@ const loadBinding = (): any => {
   }
 
   const packageRoot = __dirname;
+  const platform = process.platform;
+  const arch = process.arch;
+  
+  // Determine platform-specific binary name
+  let platformBinary: string;
+  if (platform === 'darwin') {
+    platformBinary = arch === 'arm64' 
+      ? 'thai-smartcard.darwin-arm64.node'
+      : 'thai-smartcard.darwin-x64.node';
+  } else if (platform === 'linux') {
+    platformBinary = arch === 'arm64'
+      ? 'thai-smartcard.linux-arm64-gnu.node'
+      : 'thai-smartcard.linux-x64-gnu.node';
+  } else if (platform === 'win32') {
+    platformBinary = arch === 'arm64'
+      ? 'thai-smartcard.win32-arm64-msvc.node'
+      : 'thai-smartcard.win32-x64-msvc.node';
+  } else {
+    platformBinary = '';
+  }
+
   const bindings = [
-    // Development build
+    // Development build (highest priority)
     join(packageRoot, 'thai-smartcard.node'),
     join(packageRoot, 'index.node'),
-    // Production build (platform-specific)
+    // Platform-specific production build
+    platformBinary ? join(packageRoot, platformBinary) : null,
+    // Fallback: try all platform binaries
     join(packageRoot, 'thai-smartcard.darwin-arm64.node'),
-    join(packageRoot, 'index.darwin-arm64.node'),
     join(packageRoot, 'thai-smartcard.darwin-x64.node'),
-    join(packageRoot, 'index.darwin-x64.node'),
     join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'),
-    join(packageRoot, 'thai-smartcard.linux-arm64-musl.node'),
     join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'),
-    join(packageRoot, 'thai-smartcard.linux-x64-musl.node'),
     join(packageRoot, 'thai-smartcard.win32-arm64-msvc.node'),
     join(packageRoot, 'thai-smartcard.win32-x64-msvc.node'),
-    join(packageRoot, 'index.linux-arm64-gnu.node'),
-    join(packageRoot, 'index.linux-arm64-musl.node'),
-    join(packageRoot, 'index.linux-x64-gnu.node'),
-    join(packageRoot, 'index.linux-x64-musl.node'),
-    join(packageRoot, 'index.win32-arm64-msvc.node'),
-    join(packageRoot, 'index.win32-x64-msvc.node'),
-  ];
+  ].filter(Boolean) as string[];
 
   for (const binding of bindings) {
     if (existsSync(binding)) {
@@ -41,7 +54,7 @@ const loadBinding = (): any => {
   }
 
   throw new Error(
-    `Cannot find native binding for thai-smartcard. Tried: ${bindings.join(', ')}`
+    `Cannot find native binding for thai-smartcard on ${platform}-${arch}. Tried: ${bindings.join(', ')}`
   );
 };
 
