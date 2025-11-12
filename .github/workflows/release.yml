@@ -15,12 +15,6 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
           - os: windows-latest
             target: x86_64-pc-windows-msvc
           - os: windows-latest
@@ -44,51 +38,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install PC/SC libraries and toolchains (Linux)
+      - name: Install PC/SC libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y pcscd libpcsclite-dev pkg-config
-          # Install musl toolchain for musl targets
-          if [[ "${{ matrix.target }}" == *"musl"* ]]; then
-            sudo apt-get install -y musl-tools
-          fi
-          # Install cross-compilation toolchain for aarch64 (GNU only, not musl)
-          if [[ "${{ matrix.target }}" == *"aarch64"* && "${{ matrix.target }}" != *"musl"* ]]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-          fi
-
-      - name: Configure pkg-config for cross-compilation
-        if: runner.os == 'Linux' && contains(matrix.target, 'aarch64') && !contains(matrix.target, 'musl')
-        shell: bash
-        run: |
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build native addon (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          PKG_CONFIG_ALLOW_CROSS: ${{ (contains(matrix.target, 'musl') || contains(matrix.target, 'aarch64')) && '1' || '' }}
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ contains(matrix.target, 'aarch64') && !contains(matrix.target, 'musl') && 'aarch64-linux-gnu-gcc' || '' }}
-        run: |
-          # For musl targets, we need to set library paths explicitly
-          if [[ "${{ matrix.target }}" == *"musl"* ]]; then
-            if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
-              export LIBPCSCLITE_LIB_DIR=/usr/lib/aarch64-linux-gnu
-            else
-              export LIBPCSCLITE_LIB_DIR=/usr/lib/x86_64-linux-gnu
-            fi
-            export LIBPCSCLITE_INCLUDE_DIR=/usr/include/PCSC
-            export LIBPCSCLITE_NO_PKG_CONFIG=1
-          fi
-          npx napi build --platform --target ${{ matrix.target }} --release
-
-      - name: Build native addon (Windows/macOS)
-        if: runner.os != 'Linux'
+      - name: Build native addon
         run: npx napi build --platform --target ${{ matrix.target }} --release
 
       - name: Build TypeScript shims
