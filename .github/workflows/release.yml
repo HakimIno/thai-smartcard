@@ -44,16 +44,28 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install PC/SC libraries (Linux)
+      - name: Install PC/SC libraries and toolchains (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pcscd libpcsclite-dev
+          sudo apt-get install -y pcscd libpcsclite-dev pkg-config
+          # Install musl toolchain for musl targets
+          if [[ "${{ matrix.target }}" == *"musl"* ]]; then
+            sudo apt-get install -y musl-tools
+          fi
+          # Install cross-compilation toolchain for aarch64
+          if [[ "${{ matrix.target }}" == *"aarch64"* && "${{ matrix.target }}" != *"musl"* ]]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build native addon
+        env:
+          PKG_CONFIG_ALLOW_CROSS: ${{ runner.os == 'Linux' && (contains(matrix.target, 'musl') || contains(matrix.target, 'aarch64')) && '1' || '' }}
+          # For musl and aarch64, use system libraries instead of pkg-config
+          LIBPCSCLITE_NO_PKG_CONFIG: ${{ runner.os == 'Linux' && (contains(matrix.target, 'musl') || (contains(matrix.target, 'aarch64') && !contains(matrix.target, 'musl'))) && '1' || '' }}
         run: npx napi build --platform --target ${{ matrix.target }} --release
 
       - name: Build TypeScript shims
