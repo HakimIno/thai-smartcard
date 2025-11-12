@@ -22,18 +22,25 @@ const loadBinding = (): any => {
       if (existsSync('/etc/alpine-release')) {
         isMusl = true;
       } else {
-        // Try to detect musl by checking if ldd exists and what it reports
-        // musl-based systems typically don't have glibc
-        const { execSync } = require('child_process');
-        try {
-          const lddOutput = execSync('ldd --version 2>&1', { encoding: 'utf-8', stdio: 'pipe' });
-          // musl ldd reports "musl libc" while glibc reports "GNU libc"
-          if (lddOutput.includes('musl')) {
-            isMusl = true;
+        // Check if glibc dynamic linker exists (if not, likely musl)
+        if (!existsSync('/lib/ld-linux-x86-64.so.2') && !existsSync('/lib64/ld-linux-x86-64.so.2') && 
+            !existsSync('/lib/ld-linux-aarch64.so.1') && !existsSync('/lib64/ld-linux-aarch64.so.1')) {
+          // No glibc linker found, likely musl
+          isMusl = true;
+        } else {
+          // Try to detect musl by checking if ldd exists and what it reports
+          // musl-based systems typically don't have glibc
+          const { execSync } = require('child_process');
+          try {
+            const lddOutput = execSync('ldd --version 2>&1', { encoding: 'utf-8', stdio: 'pipe' });
+            // musl ldd reports "musl libc" while glibc reports "GNU libc"
+            if (lddOutput.includes('musl')) {
+              isMusl = true;
+            }
+          } catch {
+            // If ldd fails, assume glibc (most common)
+            isMusl = false;
           }
-        } catch {
-          // If ldd fails, assume glibc (most common)
-          isMusl = false;
         }
       }
     } catch {
@@ -77,24 +84,57 @@ const loadBinding = (): any => {
     platformBinary = '';
   }
 
-  const bindings = [
+  // Build bindings list - prioritize based on platform and libc
+  const bindings: string[] = [
     // Development build (highest priority)
     join(packageRoot, 'thai-smartcard.node'),
     join(packageRoot, 'index.node'),
-    // Platform-specific production build (preferred libc)
-    platformBinary ? join(packageRoot, platformBinary) : null,
-    // Alternative libc binary (musl/gnu)
-    platformBinaryAlt ? join(packageRoot, platformBinaryAlt) : null,
-    // Fallback: try all platform binaries
-    join(packageRoot, 'thai-smartcard.darwin-arm64.node'),
-    join(packageRoot, 'thai-smartcard.darwin-x64.node'),
-    join(packageRoot, 'thai-smartcard.linux-arm64-musl.node'),
-    join(packageRoot, 'thai-smartcard.linux-x64-musl.node'),
-    join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'),
-    join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'),
-    join(packageRoot, 'thai-smartcard.win32-arm64-msvc.node'),
-    join(packageRoot, 'thai-smartcard.win32-x64-msvc.node'),
-  ].filter(Boolean) as string[];
+  ];
+
+  // Add platform-specific binary (preferred libc)
+  if (platformBinary) {
+    bindings.push(join(packageRoot, platformBinary));
+  }
+
+  // For Linux, handle musl vs glibc carefully
+  if (platform === 'linux') {
+    if (isMusl) {
+      // On musl (Alpine), ONLY try musl binaries - never try gnu binaries
+      // platformBinary already contains the correct musl binary for this arch
+      // No need to add gnu binaries - they will fail with ld-linux-x86-64.so.2 error
+    } else {
+      // On glibc, try musl as fallback (musl binaries can work on glibc, but not vice versa)
+      if (platformBinaryAlt) {
+        bindings.push(join(packageRoot, platformBinaryAlt));
+      }
+      // Add other gnu variants as fallback
+      if (arch === 'arm64') {
+        bindings.push(join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'));
+      } else {
+        bindings.push(join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'));
+      }
+      // Also try musl binaries as they might work
+      bindings.push(
+        join(packageRoot, 'thai-smartcard.linux-arm64-musl.node'),
+        join(packageRoot, 'thai-smartcard.linux-x64-musl.node')
+      );
+    }
+  } else if (platformBinaryAlt) {
+    // For non-Linux platforms, add alternative if exists
+    bindings.push(join(packageRoot, platformBinaryAlt));
+  }
+
+  // Add other platform binaries as final fallback (but skip gnu binaries on musl)
+  if (platform !== 'linux' || !isMusl) {
+    bindings.push(
+      join(packageRoot, 'thai-smartcard.darwin-arm64.node'),
+      join(packageRoot, 'thai-smartcard.darwin-x64.node'),
+      join(packageRoot, 'thai-smartcard.linux-arm64-gnu.node'),
+      join(packageRoot, 'thai-smartcard.linux-x64-gnu.node'),
+      join(packageRoot, 'thai-smartcard.win32-arm64-msvc.node'),
+      join(packageRoot, 'thai-smartcard.win32-x64-msvc.node')
+    );
+  }
 
   for (const binding of bindings) {
     if (existsSync(binding)) {
@@ -103,6 +143,29 @@ const loadBinding = (): any => {
         return nativeBinding;
       } catch (error: any) {
         const errorMessage = error?.message || String(error);
+        
+        // Check for glibc linker missing error (trying to load gnu binary on musl/Alpine)
+        if (errorMessage.includes('ld-linux-x86-64.so.2') || 
+            errorMessage.includes('ld-linux-aarch64.so.1') ||
+            errorMessage.includes('Error loading shared library')) {
+          // This means we're trying to load a glibc binary on musl
+          // Skip this binary and continue to next one
+          if (platform === 'linux' && binding.includes('-gnu.node')) {
+            // Silently skip gnu binaries on musl systems
+            continue;
+          }
+          // If we're on musl but this isn't a gnu binary, something else is wrong
+          if (isMusl && !binding.includes('-musl.node')) {
+            const muslHint = `\n\nERROR: Trying to load incompatible binary on Alpine Linux (musl).\n` +
+              `The binary "${binding}" requires glibc, but this system uses musl libc.\n` +
+              `Expected musl binary: thai-smartcard.linux-${arch === 'arm64' ? 'arm64' : 'x64'}-musl.node\n` +
+              `If the musl binary is missing, you may need to:\n` +
+              `1. Rebuild the package with musl support: npm run build:all\n` +
+              `2. Use a Debian/Ubuntu base image instead of Alpine\n` +
+              `3. Install glibc compatibility layer (not recommended)\n`;
+            throw new Error(`Failed to load native binding: ${errorMessage}${muslHint}`);
+          }
+        }
         
         // Check for PC/SC library missing error
         if (errorMessage.includes('libpcsclite') || errorMessage.includes('pcsclite')) {
