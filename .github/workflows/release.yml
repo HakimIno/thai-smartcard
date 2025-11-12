@@ -80,11 +80,23 @@ jobs:
         run: npm ci
 
       - name: Build native addon
-        env:
-          PKG_CONFIG_ALLOW_CROSS: ${{ runner.os == 'Linux' && (contains(matrix.target, 'musl') || contains(matrix.target, 'aarch64')) && '1' || '' }}
-          # For musl, bypass pkg-config and link directly
-          LIBPCSCLITE_NO_PKG_CONFIG: ${{ runner.os == 'Linux' && contains(matrix.target, 'musl') && '1' || '' }}
-        run: npx napi build --platform --target ${{ matrix.target }} --release
+        run: |
+          # Clear any inherited environment variables for non-musl targets
+          if [[ "${{ matrix.target }}" != *"musl"* ]]; then
+            unset LIBPCSCLITE_NO_PKG_CONFIG || true
+            unset LIBPCSCLITE_LIB_DIR || true
+            unset LIBPCSCLITE_INCLUDE_DIR || true
+          fi
+          # Set environment variables based on target
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            if [[ "${{ matrix.target }}" == *"musl"* ]]; then
+              export LIBPCSCLITE_NO_PKG_CONFIG=1
+            fi
+            if [[ "${{ matrix.target }}" == *"musl"* || "${{ matrix.target }}" == *"aarch64"* ]]; then
+              export PKG_CONFIG_ALLOW_CROSS=1
+            fi
+          fi
+          npx napi build --platform --target ${{ matrix.target }} --release
 
       - name: Build TypeScript shims
         run: |
