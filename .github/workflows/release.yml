@@ -3,7 +3,7 @@ name: Build and Publish (Prebuilt Binaries)
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -36,8 +36,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -59,23 +59,11 @@ jobs:
           fi
 
       - name: Configure pkg-config for cross-compilation
-        if: runner.os == 'Linux' && (contains(matrix.target, 'musl') || contains(matrix.target, 'aarch64'))
+        if: runner.os == 'Linux' && contains(matrix.target, 'aarch64') && !contains(matrix.target, 'musl')
         shell: bash
         run: |
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          # For aarch64 GNU, try to use system pkg-config with cross-compilation
-          if [[ "${{ matrix.target }}" == *"aarch64"* && "${{ matrix.target }}" != *"musl"* ]]; then
-            echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
-          fi
-          # For musl, set library paths - musl can link against GNU libc libraries
-          if [[ "${{ matrix.target }}" == *"musl"* ]]; then
-            if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
-              echo "LIBPCSCLITE_LIB_DIR=/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
-            else
-              echo "LIBPCSCLITE_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
-            fi
-            echo "LIBPCSCLITE_INCLUDE_DIR=/usr/include/PCSC" >> $GITHUB_ENV
-          fi
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: npm ci
@@ -85,9 +73,19 @@ jobs:
         shell: bash
         env:
           PKG_CONFIG_ALLOW_CROSS: ${{ (contains(matrix.target, 'musl') || contains(matrix.target, 'aarch64')) && '1' || '' }}
-          LIBPCSCLITE_NO_PKG_CONFIG: ${{ contains(matrix.target, 'musl') && '1' || '' }}
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ contains(matrix.target, 'aarch64') && !contains(matrix.target, 'musl') && 'aarch64-linux-gnu-gcc' || '' }}
-        run: npx napi build --platform --target ${{ matrix.target }} --release
+        run: |
+          # For musl targets, we need to set library paths explicitly
+          if [[ "${{ matrix.target }}" == *"musl"* ]]; then
+            if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
+              export LIBPCSCLITE_LIB_DIR=/usr/lib/aarch64-linux-gnu
+            else
+              export LIBPCSCLITE_LIB_DIR=/usr/lib/x86_64-linux-gnu
+            fi
+            export LIBPCSCLITE_INCLUDE_DIR=/usr/include/PCSC
+            export LIBPCSCLITE_NO_PKG_CONFIG=1
+          fi
+          npx napi build --platform --target ${{ matrix.target }} --release
 
       - name: Build native addon (Windows/macOS)
         if: runner.os != 'Linux'
@@ -120,8 +118,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -147,5 +145,3 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-
